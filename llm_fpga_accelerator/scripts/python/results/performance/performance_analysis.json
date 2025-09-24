@@ -1,0 +1,67 @@
+{
+  "size_analysis": {
+    "64x64": {
+      "matrix_size": 64,
+      "avg_hw_cycles": 8050.0,
+      "avg_hw_gops": 12.7,
+      "avg_speedup": 3.1500000000000004,
+      "avg_error": 0.0010999999999999998,
+      "std_speedup": 0.050000000000000044,
+      "hw_utilization": 12.7,
+      "operations": 524288,
+      "theoretical_gops": 6.512894409937889
+    },
+    "128x128": {
+      "matrix_size": 128,
+      "avg_hw_cycles": 31900.0,
+      "avg_hw_gops": 25.700000000000003,
+      "avg_speedup": 5.85,
+      "avg_error": 0.0008500000000000001,
+      "std_speedup": 0.050000000000000266,
+      "hw_utilization": 25.7,
+      "operations": 4194304,
+      "theoretical_gops": 13.14828840125392
+    }
+  },
+  "performance_trends": {
+    "sizes": [
+      64,
+      128
+    ],
+    "speedup_trend": [
+      0.00013497488839285692,
+      0.01627232142857142,
+      1.555714285714287
+    ],
+    "gops_trend": [
+      0.000684291294642857,
+      0.07174107142857142,
+      5.305714285714281
+    ],
+    "peak_speedup": 5.85,
+    "peak_gops": 25.700000000000003,
+    "best_size": 128,
+    "avg_utilization": 19.2,
+    "avg_error": 0.000975
+  },
+  "efficiency_analysis": {
+    "total_operations": 9437184,
+    "total_cycles": 79900,
+    "avg_ops_per_cycle": 118.11244055068836,
+    "theoretical_peak_ops_per_cycle": 128,
+    "efficiency_percentage": 92.27534418022529,
+    "energy_efficiency_estimate": 118.11244055068836
+  },
+  "scaling_analysis": {
+    "sizes": [
+      64,
+      128
+    ],
+    "normalized_throughput": [
+      65.12894409937888,
+      131.4828840125392
+    ],
+    "scaling_exponent": 1.0135042643497456,
+    "scaling_interpretation": "Sublinear scaling (bandwidth limited)"
+  }
+}

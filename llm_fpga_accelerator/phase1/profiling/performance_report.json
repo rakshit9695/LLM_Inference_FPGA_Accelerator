@@ -1,0 +1,41 @@
+{
+  "summary": {
+    "embedding": {
+      "avg_time_per_query_ms": 102.99616513475485,
+      "best_throughput_qps": 182.1351943534315,
+      "memory_usage_mb": 0.0234375
+    },
+    "retrieval": {
+      "avg_time_ms": 27.249966677482007,
+      "best_throughput_sps": 49.7116310393192
+    }
+  },
+  "hotspots": [
+    {
+      "component": "embedding_generation",
+      "severity": "high",
+      "time_ms": 102.99616513475485,
+      "description": "Embedding generation is a major bottleneck"
+    },
+    {
+      "component": "faiss_retrieval",
+      "severity": "medium",
+      "time_ms": 27.249966677482007,
+      "description": "FAISS retrieval could benefit from optimization"
+    }
+  ],
+  "recommendations": [
+    {
+      "component": "embedding_generation",
+      "recommendation": "Implement dedicated matrix multiplication accelerator for transformer layers",
+      "expected_speedup": "5-10x",
+      "hardware_target": "Systolic array for GEMM operations"
+    },
+    {
+      "component": "faiss_retrieval",
+      "recommendation": "Implement vector dot-product accelerator for similarity search",
+      "expected_speedup": "3-5x",
+      "hardware_target": "Parallel MAC units for vector operations"
+    }
+  ]
+}

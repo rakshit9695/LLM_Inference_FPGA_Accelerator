@@ -1,0 +1,11 @@
+query_id,query,response,retrieval_time,generation_time,total_time,num_retrieved_docs
+0,What are the applications of AI?,No.,0.2582014589861501,0.42599150000023656,0.6842181670072023,5
+1,What do you know about explain recurrent neural networks?,RNNs,0.5312195420265198,0.14470704100676812,0.6759452080004849,5
+2,Please describe what is supervised learning?,I think it's already on the list of things to do when it comes to the next big neural network.,0.013151624996680766,0.5277656669786666,0.5409386249957606,5
+3,Tell me about what are the applications of ai?,A little bit,0.5054473329801112,0.14978149998933077,0.6552448339934926,5
+4,What do you know about explain gradient boosting?,They're not.,0.012990834016818553,0.1608324169937987,0.17383870799676515,5
+5,Please describe explain transformer models,"Why do people think they can't be made, it's not like we can see the neural networks in action.",0.4688790420186706,0.5240425000083633,0.9929374999774154,5
+6,What do you know about explain natural language processing?,No one knows,0.01268716700724326,0.15266004198929295,0.16536516702035442,5
+7,How does machine learning work?,no,0.012816875008866191,0.10150933300610632,0.11434162501245737,5
+8,Tell me about how do neural networks function?,It's a neural network.,0.48459870798978955,0.19453820801572874,0.6791527080058586,5
+9,What is artificial intelligence?,Artificial Intelligence,0.6166525000007823,0.20316754200030118,0.8198379999957979,5

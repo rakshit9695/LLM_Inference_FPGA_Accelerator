@@ -1,0 +1,290 @@
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <string>
+#include <memory>
+#include <chrono>
+#include <cstdlib>
+#include <cassert>
+#include <cmath>
+
+#include <verilated.h>
+#include <verilated_vcd_c.h>
+
+// Generated Verilator headers (ensure top module name matches)
+#include "Vgemm_accelerator.h"
+#include "Vgemm_accelerator__Syms.h"
+
+#include "axi_driver.h"
+#include "memory_model.h"
+#include "gemm_testbench.h"
+
+using vluint64_t = unsigned long long;
+
+class GEMMSimulator {
+private:
+    std::unique_ptr<Vgemm_accelerator> dut;
+    std::unique_ptr<VerilatedVcdC> tfp;
+    std::unique_ptr<AXIDriver> axi_driver;
+    std::unique_ptr<MemoryModel> memory_model;
+
+    vluint64_t sim_time;
+    bool trace_enabled;
+    std::string trace_filename;
+
+public:
+    GEMMSimulator(bool enable_tracing = true, const std::string& trace_file = "gemm_trace.vcd")
+        : sim_time(0), trace_enabled(enable_tracing), trace_filename(trace_file)
+    {
+        Verilated::commandArgs(0, (const char**)nullptr);
+        Verilated::traceEverOn(enable_tracing);
+        dut = std::make_unique<Vgemm_accelerator>();
+
+        if (trace_enabled) {
+            tfp = std::make_unique<VerilatedVcdC>();
+            dut->trace(tfp.get(), 99);
+            tfp->open(trace_filename.c_str());
+            std::cout << "Tracing enabled: " << trace_filename << std::endl;
+        }
+
+        axi_driver = std::make_unique<AXIDriver>(dut.get());
+        memory_model = std::make_unique<MemoryModel>(1024 * 1024); // 1MB
+
+        reset();
+    }
+
+    ~GEMMSimulator() {
+        if (tfp) tfp->close();
+        dut->final();
+    }
+
+    void reset() {
+        dut->rst_n = 0;
+        dut->clk = 0;
+
+        // initialize AXI signals
+        dut->s_axi_awvalid = 0;
+        dut->s_axi_wvalid  = 0;
+        dut->s_axi_bready  = 0;
+        dut->s_axi_arvalid = 0;
+        dut->s_axi_rready  = 0;
+
+        // initialize mem interfaces
+        dut->mem_a_valid = 0;
+        dut->mem_b_valid = 0;
+        dut->start = 0;
+        dut->done = 0;
+
+        for (int i = 0; i < 20; ++i) {
+            clock_tick();
+        }
+
+        dut->rst_n = 1;
+        clock_tick();
+
+        std::cout << "Design reset completed at time " << sim_time << std::endl;
+    }
+
+    void clock_tick() {
+        // rising edge
+        dut->clk = 1;
+        dut->eval();
+        // memory model may respond on the same cycle
+        memory_model->update(dut.get());
+        if (trace_enabled && tfp) tfp->dump(sim_time);
+
+        sim_time += 1;
+
+        // falling edge
+        dut->clk = 0;
+        dut->eval();
+        memory_model->update(dut.get());
+        if (trace_enabled && tfp) tfp->dump(sim_time);
+        sim_time += 1;
+    }
+
+    void configure_matrix(uint16_t m, uint16_t n, uint16_t k,
+                          uint32_t addr_a, uint32_t addr_b, uint32_t addr_c,
+                          uint8_t data_format = 2) // default INT16
+    {
+        std::cout << "Configuring matrix multiplication: " << m << "x" << n << " @ " << k << std::endl;
+        axi_driver->write_register(0x00, m);
+        axi_driver->write_register(0x04, n);
+        axi_driver->write_register(0x08, k);
+        axi_driver->write_register(0x10, addr_a);
+        axi_driver->write_register(0x14, addr_b);
+        axi_driver->write_register(0x18, addr_c);
+        uint32_t config = data_format & 0x3;
+        axi_driver->write_register(0x0C, config);
+        std::cout << "Configuration complete" << std::endl;
+    }
+
+    void load_matrix_data(uint32_t base_addr, const std::vector<int16_t>& data) {
+        std::cout << "Loading " << data.size() << " elements at address 0x" << std::hex << base_addr << std::dec << std::endl;
+        for (size_t i = 0; i < data.size(); ++i) {
+            memory_model->write_int16(base_addr + i * 2, data[i]);
+        }
+    }
+
+    std::vector<int32_t> read_result_matrix(uint32_t base_addr, size_t rows, size_t cols) {
+        std::vector<int32_t> result;
+        result.reserve(rows * cols);
+        for (size_t i = 0; i < rows * cols; ++i) {
+            result.push_back(memory_model->read_int32(base_addr + i * 4));
+        }
+        return result;
+    }
+
+    bool run_gemm_operation(uint32_t timeout_cycles = 10000) {
+        std::cout << "Starting GEMM operation..." << std::endl;
+        dut->start = 1;
+        clock_tick();
+        dut->start = 0;
+
+        uint32_t cycles = 0;
+        while (!dut->done && cycles < timeout_cycles) {
+            clock_tick();
+            ++cycles;
+            if (cycles % 1000 == 0) std::cout << "Waiting... cycle " << cycles << std::endl;
+        }
+
+        if (dut->done) {
+            std::cout << "GEMM operation completed in " << cycles << " cycles" << std::endl;
+            return true;
+        } else {
+            std::cout << "GEMM operation timed out after " << timeout_cycles << " cycles" << std::endl;
+            return false;
+        }
+    }
+
+    uint32_t get_cycle_count() {
+        // Assuming there's a register at 0x20 that holds the cycle count
+        return axi_driver->read_register(0x20);
+    }
+
+    void print_status() {
+        uint32_t status = axi_driver->read_register(0x1C);
+        bool busy = status & 0x1;
+        bool done = (status >> 1) & 0x1;
+        uint32_t cycles = get_cycle_count();
+        std::cout << "Status: " << (busy ? "BUSY" : "IDLE") << ", Done: " << (done ? "YES" : "NO")
+                  << ", Cycles: " << cycles << std::endl;
+    }
+
+    vluint64_t get_sim_time() const { return sim_time; }
+};
+
+static std::vector<int16_t> generate_test_matrix(size_t rows, size_t cols, int seed = 42) {
+    std::srand(seed);
+    std::vector<int16_t> matrix;
+    matrix.reserve(rows * cols);
+    for (size_t i = 0; i < rows * cols; ++i) {
+        matrix.push_back(static_cast<int16_t>((std::rand() % 256) - 128));
+    }
+    return matrix;
+}
+
+static std::vector<int32_t> compute_reference_gemm(const std::vector<int16_t>& A,
+                                                  const std::vector<int16_t>& B,
+                                                  size_t M, size_t N, size_t K)
+{
+    std::vector<int32_t> C(M * N, 0);
+    for (size_t i = 0; i < M; ++i) {
+        for (size_t j = 0; j < N; ++j) {
+            int32_t sum = 0;
+            for (size_t k = 0; k < K; ++k) {
+                sum += static_cast<int32_t>(A[i * K + k]) * static_cast<int32_t>(B[k * N + j]);
+            }
+            C[i * N + j] = sum;
+        }
+    }
+    return C;
+}
+
+static bool verify_results(const std::vector<int32_t>& actual,
+                          const std::vector<int32_t>& expected,
+                          double tolerance = 1e-3)
+{
+    if (actual.size() != expected.size()) {
+        std::cout << "Size mismatch: actual=" << actual.size() << ", expected=" << expected.size() << std::endl;
+        return false;
+    }
+    size_t errors = 0;
+    for (size_t i = 0; i < actual.size(); ++i) {
+        int64_t diff = static_cast<int64_t>(actual[i]) - static_cast<int64_t>(expected[i]);
+        int64_t absdiff = std::llabs(diff);
+        int64_t maxv = std::max<int64_t>(std::llabs(actual[i]), std::llabs(expected[i]));
+        double rel = maxv > 0 ? static_cast<double>(absdiff) / maxv : (absdiff == 0 ? 0.0 : 1.0);
+        if (rel > tolerance) {
+            if (errors < 10) {
+                std::cout << "Error at idx " << i << ": actual=" << actual[i] << ", expected=" << expected[i] << ", rel=" << rel << std::endl;
+            }
+            ++errors;
+        }
+    }
+    if (errors) {
+        std::cout << "Verification failed: " << errors << "/" << actual.size() << " incorrect" << std::endl;
+        return false;
+    }
+    std::cout << "Verification passed: all " << actual.size() << " elements correct" << std::endl;
+    return true;
+}
+
+int main(int argc, char** argv) {
+    std::cout << "GEMM Accelerator Verilator Simulation" << std::endl;
+    bool enable_tracing = true;
+    std::string trace_file = "gemm_trace.vcd";
+
+    for (int i = 1; i < argc; ++i) {
+        std::string a = argv[i];
+        if (a == "--no-trace") enable_tracing = false;
+        else if (a == "--trace" && i+1 < argc) { trace_file = argv[++i]; }
+        else if (a == "--tracefile" && i+1 < argc) { trace_file = argv[++i]; }
+    }
+
+    GEMMSimulator sim(enable_tracing, trace_file);
+
+    const size_t M = 64, N = 64, K = 64;
+    const uint32_t ADDR_A = 0x1000;
+    const uint32_t ADDR_B = 0x5000;
+    const uint32_t ADDR_C = 0x9000;
+
+    auto matrix_A = generate_test_matrix(M, K, 42);
+    auto matrix_B = generate_test_matrix(K, N, 43);
+    auto reference_C = compute_reference_gemm(matrix_A, matrix_B, M, N, K);
+
+    sim.configure_matrix(M, N, K, ADDR_A, ADDR_B, ADDR_C);
+    sim.load_matrix_data(ADDR_A, matrix_A);
+    sim.load_matrix_data(ADDR_B, matrix_B);
+
+    auto start_time = std::chrono::high_resolution_clock::now();
+    bool success = sim.run_gemm_operation(50000);
+    auto end_time = std::chrono::high_resolution_clock::now();
+
+    if (!success) {
+        std::cerr << "GEMM operation failed!" << std::endl;
+        return 1;
+    }
+
+    auto actual_C = sim.read_result_matrix(ADDR_C, M, N);
+    bool verified = verify_results(actual_C, reference_C, 0.001);
+
+    uint32_t cycles = sim.get_cycle_count();
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+
+    std::cout << "\nPerformance Metrics:\n";
+    std::cout << "Simulation cycles: " << cycles << std::endl;
+    std::cout << "Simulation time: " << duration.count() << " us" << std::endl;
+    std::cout << "Operations (MAC): " << (2ULL * M * N * K) << std::endl;
+    if (cycles > 0) {
+        std::cout << "Theoretical GOPS: " << (2.0 * M * N * K / cycles * 100e6 / 1e9) << " @ 100MHz" << std::endl;
+    }
+
+    std::ofstream results_file("sim/results/basic_test_results.csv");
+    results_file << "M,N,K,Cycles,GOPS,Verified\n";
+    results_file << M << "," << N << "," << K << "," << cycles << "," << (cycles>0 ? (2.0 * M * N * K / cycles * 100e6 / 1e9) : 0.0) << "," << (verified ? "PASS" : "FAIL") << "\n";
+    results_file.close();
+
+    std::cout << "\nTest " << (verified ? "PASSED" : "FAILED") << "!\n";
+    return verified ? 0 : 1;
+}

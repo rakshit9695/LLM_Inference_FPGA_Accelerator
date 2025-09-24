@@ -1,0 +1,9 @@
+{
+  "avg_retrieval_time": 0.2916645085031632,
+  "avg_generation_time": 0.25849957499885934,
+  "avg_total_time": 0.5501820542005589,
+  "std_total_time": 0.284598147057892,
+  "queries_per_second": 1.8175801852589473,
+  "total_queries": 10,
+  "total_benchmark_time": 5.518850088119507
+}

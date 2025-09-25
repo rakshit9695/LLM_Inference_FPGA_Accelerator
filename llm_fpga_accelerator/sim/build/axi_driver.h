@@ -3,14 +3,16 @@
 
 #include <cstdint>
 #include <functional>
-#include "Vgemm_accelerator.h"
+
+// Forward declaration
+class Vgemm_accelerator;
 
 class AXIDriver {
 public:
-    // dut pointer is the Verilated model
+    // Constructor takes pointer to the Verilated model
     explicit AXIDriver(Vgemm_accelerator* dut_);
 
-    // Basic AXI-lite register writes/reads (blocking, simple)
+    // Basic AXI-Lite register writes/reads (blocking, simple)
     void write_register(uint32_t addr, uint32_t data);
     uint32_t read_register(uint32_t addr);
 

@@ -5,7 +5,7 @@
             "includePath": [
                 "${workspaceFolder}/**",
                 "/opt/homebrew/share/verilator/include",
-                "${workspaceFolder}/llm_fpga_accelerator/sim/build"
+                "${workspaceFolder}/llm_fpga_accelerator/sim/build/obj_dir"
             ],
             "defines": [],
             "macFrameworkPath": [],

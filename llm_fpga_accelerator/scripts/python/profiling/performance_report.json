@@ -1,20 +1,20 @@
 {
   "summary": {
     "embedding": {
-      "avg_time_per_query_ms": 38.22696287488725,
-      "best_throughput_qps": 199.92679679580903,
+      "avg_time_per_query_ms": 40.09116876574126,
+      "best_throughput_qps": 202.121326483459,
       "memory_usage_mb": 0.0146484375
     },
     "retrieval": {
-      "avg_time_ms": 34.853387449948066,
-      "best_throughput_sps": 49.28857098498443
+      "avg_time_ms": 28.93498227501823,
+      "best_throughput_sps": 47.50250610163001
     }
   },
   "hotspots": [
     {
       "component": "faiss_retrieval",
       "severity": "medium",
-      "time_ms": 34.853387449948066,
+      "time_ms": 28.93498227501823,
       "description": "FAISS retrieval could benefit from optimization"
     }
   ],

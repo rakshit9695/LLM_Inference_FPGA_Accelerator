@@ -29,6 +29,16 @@ class CompactRAG:
                  max_docs: int = 1000,
                  vector_dim: int = None):
         
+        """
+        When you create a CompactRAG object:
+        It loads:
+            An embedding model (sentence-transformers/all-MiniLM-L6-v2) to turn text into dense vectors
+            A generation model (microsoft/DialoGPT-small) to generate responses.
+            Sets up FAISS (a vector search library).
+            Prepares metrics collection for profiling performance.
+            So at this point, you have models ready, but no documents indexed yet.
+        """
+        
         self.max_docs = max_docs
         self.embedding_model_name = embedding_model_name
         self.generation_model_name = generation_model_name
@@ -60,7 +70,13 @@ class CompactRAG:
         }
 
     def load_documents(self, documents: List[str] = None, dataset_name: str = None):
-        """Load documents from list or dataset."""
+        """
+        You have two options:
+        Provide a list of your own documents Or load a dataset:
+            If "wikipedia_sample", it uses a pre-defined set of ~25 AI/ML-related texts and duplicates/shuffles them up to max_docs.
+            If another dataset (like "squad"), it tries to load via Hugging Face datasets.
+            ➡️ After this step, you have self.documents filled with text knowledge.
+        """
         if documents:
             self.documents = documents[:self.max_docs]
         elif dataset_name:
@@ -117,7 +133,13 @@ class CompactRAG:
         logger.info(f"Loaded {len(self.documents)} documents")
 
     def build_index(self):
-        """Build FAISS index for document retrieval."""
+        """
+        This is where you prepare the knowledge for retrieval:
+            Encode all documents in batches → each document is converted into a dense vector (768-dim for MiniLM).
+            Stack embeddings into a NumPy matrix.
+            Create a FAISS index (IndexFlatL2) and add all embeddings. -- It is a research algo made by Meta AI to facilitate similarity search.
+            Now your system can perform fast nearest-neighbor searches for queries.
+        """
         logger.info("Building document embeddings...")
         start_time = time.perf_counter()
         
@@ -145,7 +167,17 @@ class CompactRAG:
         logger.info(f"Built FAISS index in {index_time:.2f}s")
 
     def retrieve(self, query: str, k: int = 5) -> Tuple[List[str], List[float], float]:
-        """Retrieve relevant documents for a query."""
+        """
+        Given a user query:
+            Encode the query into an embedding.
+            FAISS searches for the top-k closest document vectors.
+            
+        Return:
+            The retrieved documents.
+            Their distances (similarity scores).
+            The retrieval time.
+            This step makes sure the generator has contextual knowledge before answering.     
+        """
         # Generate query embedding
         start_time = time.perf_counter()
         query_embedding = self.embedder.encode([query], convert_to_numpy=True)
@@ -168,7 +200,21 @@ class CompactRAG:
         return retrieved_docs, retrieved_scores, total_retrieval_time
 
     def generate(self, query: str, context_docs: List[str], max_length: int = 128) -> Tuple[str, float]:
-        """Generate response using retrieved context."""
+        """
+        Once documents are retrieved:
+            Concatenate the top-3 retrieved documents into a context string.
+                Build a prompt:
+
+                    Context: <docs>
+                    Question: <user_query>
+                    Answer:
+
+            Tokenize and send to the generator (DialoGPT-small).
+            Generate text with sampling (temperature=0.7).
+            Strip off the prompt, return only the model’s answer.
+            This creates a context-aware response (not just a blind LM answer).
+        
+        """
         start_time = time.perf_counter()
         
         # Prepare input with context
@@ -196,7 +242,22 @@ class CompactRAG:
         return response, generation_time
 
     def query(self, question: str, k: int = 5) -> Dict[str, Any]:
-        """Complete RAG query pipeline."""
+        """
+        Covering an example for the same here --
+        When you call rag.query("What is AI?"):
+            Calls retrieve() → gets top-k relevant docs.
+            Calls generate() → uses docs + query to produce response.
+            Collects timings (retrieval, generation, total).
+            Returns everything in a dictionary:
+
+                Eg -- {
+                'question': ...,
+                'response': ...,
+                'retrieved_docs': [...],
+                'scores': [...],
+                'timing': {...}
+                }
+        """
         start_time = time.perf_counter()
         
         # Step 1: Retrieve relevant documents
@@ -225,7 +286,20 @@ class CompactRAG:
         }
 
     def benchmark(self, queries: List[str], output_path: str = None) -> pd.DataFrame:
-        """Run benchmark on multiple queries."""
+        """
+        To test efficiency:
+            Loops over many queries (e.g., 20).
+            Runs the full pipeline for each.
+            Collects responses and timings.
+            Saves results to a CSV (benchmark_results.csv).
+
+        You get a pandas.DataFrame with:
+            Query text.
+            Model response.
+            Retrieval time, generation time, total time.
+            Number of retrieved docs.
+
+        """
         results = []
         
         logger.info(f"Running benchmark on {len(queries)} queries...")
@@ -270,7 +344,16 @@ class CompactRAG:
         return df
 
     def get_performance_summary(self) -> Dict[str, float]:
-        """Get performance metrics summary."""
+        """
+        Aggregates metrics:
+            Average retrieval time.
+            Average generation time.
+            Average total time.
+            Std deviation of total time.
+            Queries per second.
+            Total queries run.
+            This helps you profile efficiency and bottlenecks (retrieval vs generation).
+        """
         if not self.metrics['total_times']:
             return {}
         
@@ -284,7 +367,10 @@ class CompactRAG:
         }
 
 def create_sample_queries(n_queries: int = 50, seed: int = 42) -> List[str]:
-    """Create sample queries for benchmarking."""
+    """
+    As the name suggests this is a function to just generate random questions to test the efficiency of the prepared
+    RAG Pipeline
+    """
     np.random.seed(seed)
     
     base_queries = [
@@ -331,19 +417,14 @@ def create_sample_queries(n_queries: int = 50, seed: int = 42) -> List[str]:
 if __name__ == "__main__":
     # Initialize RAG pipeline
     rag = CompactRAG(max_docs=1000)
-    
     # Load sample documents
     rag.load_documents(dataset_name="wikipedia_sample")
-    
     # Build index
     rag.build_index()
-    
     # Create sample queries
-    queries = create_sample_queries(n_queries=20)
-    
+    queries = create_sample_queries(n_queries=20)    
     # Run benchmark
     results_df = rag.benchmark(queries, output_path="data/benchmark_results.csv")
-    
     # Print performance summary
     summary = rag.get_performance_summary()
     print("\nPerformance Summary:")

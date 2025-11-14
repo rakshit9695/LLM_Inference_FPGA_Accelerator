@@ -26,8 +26,33 @@ import gc
 # Import our RAG pipeline
 from rag_pipeline import CompactRAG, create_sample_queries
 
+"""
+The above imports can be sumarised as the follwoing - 
+    torch, numpy, pandas, time, psutil, json, matplotlib.pyplot, seaborn: core numeric / plotting / system tools.
+    Path from pathlib: file paths for saving traces/plots.
+    threading, queue: imported but not used in the provided code (leftover).
+    contextmanager: for the memory_tracer helper.
+    torch.profiler and friends: record CPU (and optionally CUDA) execution to generate trace files and per-op timing.
+    tracemalloc, gc, memory_profiler: memory measurement tools (but memory_profile is imported but not used as a decorator in the code).
+    from rag_pipeline import CompactRAG, create_sample_queries: the RAG pipeline under test and a query generator.
+
+"""
+
 class RAGProfiler:
-    """Comprehensive profiler for RAG pipeline components."""
+    """
+    What it sets up:
+        self.rag: reference to the CompactRAG instance to profile.
+        self.profiling_results: dictionary to collect profiling outputs (embedding_profiles, retrieval_profiles, generation_profiles, memory_traces, system_metrics, etc.).
+
+    Directory structure:
+        profiling/ root
+        profiling/traces/ (chrome trace JSONs)
+        profiling/plots/ (PNG plots)
+
+    These directories are created if missing.
+    Purpose: centralized storage of profiling artifacts for later examination.
+    
+    """
     
     def __init__(self, rag_pipeline: CompactRAG):
         self.rag = rag_pipeline
@@ -49,7 +74,16 @@ class RAGProfiler:
 
     @contextmanager
     def memory_tracer(self, trace_name: str):
-        """Context manager for memory tracing."""
+        """
+        This actually looks into how the memory is allocated for the overall process -- somewhat??
+            psutil.Process().memory_info().rss gives the process resident set size (RSS) — total process memory in MB (includes native allocations and extension memory).
+            tracemalloc tracks Python-level memory allocations (current and peak).
+            The code records both, and stores start_memory, end_memory, memory_delta_mb, and tracemalloc stats (current_traced_mb, peak_traced_mb).
+
+        Important note: tracemalloc only sees Python allocations (not native allocations made by C/C++ extensions like PyTorch tensors). 
+        So peak_traced_mb will generally be smaller than end_memory. The combination of psutil + tracemalloc gives a more complete picture.
+        
+        """
         tracemalloc.start()
         start_memory = psutil.Process().memory_info().rss / 1024 / 1024  # MB
         
@@ -69,7 +103,28 @@ class RAGProfiler:
         })
 
     def profile_embedding_generation(self, queries: List[str], batch_sizes: List[int] = [1, 4, 8, 16]) -> Dict[str, Any]:
-        """Profile embedding generation with different batch sizes."""
+        """
+        Purpose: measure embedder latency, throughput and memory for different batch sizes.
+
+        What happens per batch size:
+            Take query_batch = queries[:batch_size].
+            Use torch.profiler.profile(activities=[ProfilerActivity.CPU], record_shapes=True, with_stack=True) to trace CPU ops while calling the embedder.
+            Wrap the encoding call in memory_tracer(...) and record_function("embedding_generation").
+            Call self.rag.embedder.encode(query_batch, convert_to_numpy=True, show_progress_bar=False) and time it.
+            Store:
+                total_time, time_per_query, queries_per_second,
+                embedding_shape, memory_mb = embeddings.nbytes / (1024^2).
+            Export a chrome trace JSON to profiling/traces/embedding_batch_{batch_size}.json.
+            Analyze the profiler with _analyze_torch_profile and append that analysis.
+
+        Caveats / remarks:
+            SentenceTransformer.encode() may internally use PyTorch but also Python code; the profiler will capture PyTorch CPU ops if they are used. Some parts of the embedding pipeline (tokenization, Python control flow) may show up in profiler or not — profiling granularity depends on where the heavy work runs.
+            Measuring embeddings.nbytes is accurate for the numpy array memory but does not capture temporary buffers, Python overhead, or native memory used by the model.
+            Warm-up runs: the first call is often slower (initial model lazy init). To get stable numbers you should do warm-up iterations before measuring.
+            Profile trace files can be large; be cautious with many runs.
+
+
+        """
         print("Profiling embedding generation...")
         
         results = {
@@ -123,7 +178,23 @@ class RAGProfiler:
         return results
 
     def profile_faiss_retrieval(self, queries: List[str], k_values: List[int] = [1, 5, 10, 20]) -> Dict[str, Any]:
-        """Profile FAISS retrieval with different k values."""
+        """
+        Purpose: measure FAISS search latency for different k values.
+        What it does:
+            For each k, loop over the first 10 queries (you can change the number).
+            For each query:
+            Start memory_tracer context.
+            Encode the query to get a query embedding (this is included in the timed block).
+            Call self.rag.faiss_index.search(query_emb.astype('float32'), k).
+            Record end_time.
+            Aggregate times into avg_time, std_time, min_time, max_time.
+            Compute searches_per_second = 1.0 / avg_time and avg_distances (mean of distances).
+
+        Caveats:
+            Measuring both query embedding time AND FAISS search inside the same timed block gives an end-to-end retrieval number — that's useful, but you might want to separate embedding time vs FAISS time to isolate the index cost.
+            FAISS search time depends on index type and hardware (CPU vector instruction sets, multi-threading). IndexFlatL2 is exact search; other indices (IVF, HNSW) behave differently.
+            If FAISS is built with multi-threading enabled, it could use multiple cores — psutil plus per-thread profiling could be necessary for deeper analysis.
+        """
         print("Profiling FAISS retrieval...")
         
         results = {
@@ -174,7 +245,30 @@ class RAGProfiler:
         return results
 
     def profile_attention_mechanism(self, input_lengths: List[int] = [64, 128, 256, 512]) -> Dict[str, Any]:
-        """Profile attention mechanism computation patterns."""
+        """
+        Purpose: synthetic micro-benchmark of transformer attention computation (useful to estimate FLOPS scaling vs sequence length).
+        What it does:
+            Uses embed_dim = self.rag.vector_dim (re-uses the embedding vector dimension).
+            Sets num_heads = 8, head_dim = embed_dim // num_heads.
+            For each seq_len:
+                Creates random tensors: q, k, v shaped for multi-head attention (1 x num_heads x seq_len x head_dim).
+                Times:
+                    scores = torch.matmul(q, k.transpose(-2,-1)) / sqrt(head_dim) (Q @ K^T)
+                    attn_weights = torch.softmax(scores, dim=-1)
+                    attn_output = torch.matmul(attn_weights, v)
+                    Reconstruct heads to output shape
+                Computes theoretical FLOPs:
+                    QK^T: batch_size * num_heads * seq_len^2 * head_dim
+                    Softmax approximated as 3 * batch_size * num_heads * seq_len^2
+                    Attn@V: same as QK^T
+                    total_flops = flops_qkt + flops_softmax + flops_attnv
+                Records attention_time, flops, gflops_per_sec = total_flops / attention_time / 1e9, and memory used for tensors.
+        Important notes:
+            This is a simulation — it helps extrapolate computational cost and memory needs but is not a substitute for profiling the actual transformer model (model specifics like layer norm, bias, fused kernels, quantization, and CUDA accelerations change real numbers drastically).
+            Using self.rag.vector_dim for embed_dim is convenient but real transformer models use hidden sizes (e.g., 768, 1024) — ensure vector_dim aligns with the model you actually want to emulate.
+            Export chrome trace: profiling/traces/attention_seq_{seq_len}.json.
+
+        """
         print("Profiling attention mechanism...")
         
         results = {
@@ -271,7 +365,24 @@ class RAGProfiler:
         return results
 
     def _analyze_torch_profile(self, prof, profile_name: str) -> Dict[str, Any]:
-        """Analyze PyTorch profiler results."""
+        """
+        Purpose: summarize torch.profiler output.
+            What it does:
+                Calls prof.key_averages() and sorts operations by cpu_time_total.
+                Collects the top 10 operations with:
+                name, cpu_time_total, cpu_time_avg (per call), count, input_shapes (if available).
+            Returns:
+                {
+                'profile_name': profile_name,
+                'total_time': sum(item.cpu_time_total for item in key_averages),
+                'top_operations': [...]
+                }
+
+        Notes / gotchas:
+            The profiler times are aggregated; summing cpu_time_total across key_averages may double-count if operations are nested. Use these numbers for relative importance (hotspot discovery), not absolute timing without caution.
+            cpu_time_total units: profiler reports have units (typically microseconds). When presenting results, convert to ms/ s appropriately. (Check your torch version docs for exact units if you need precise display.)
+
+        """
         key_averages = prof.key_averages()
         
         # Get top operations by CPU time
@@ -299,7 +410,19 @@ class RAGProfiler:
         return analysis
 
     def generate_performance_report(self) -> Dict[str, Any]:
-        """Generate comprehensive performance analysis report."""
+        """
+        No need for a detailed understadnding of what is happening, since it is self explonotary---
+        Builds a short automated analysis and recommendations:
+            For embedding profiles, computes:
+                avg_time_per_query_ms, best_throughput_qps, memory_usage_mb (max).
+                Flags hotspot if avg_embedding_time > 0.05 seconds (50 ms).
+                For retrieval profiles, similarly computes avg_time_ms and flags if avg_retrieval_time > 0.01 seconds (10 ms).
+                Based on hotspots, appends hardware/software recommendations (example: matrix multiplication accelerator, vector dot-product accelerator with expected speedups).
+
+        Remarks:
+            Thresholds (50ms, 10ms) are heuristic — adjust to your application SLA.
+            Recommendations are illustrative; validate them with more runs and real hardware data.
+        """
         print("Generating performance report...")
         
         report = {
@@ -367,7 +490,30 @@ class RAGProfiler:
         return report
 
     def plot_profiling_results(self):
-        """Generate visualization plots for profiling results."""
+        """
+        What they do:
+        Set matplotlib style (tries seaborn-v0_8-whitegrid, falls back to defaults).
+
+            For embedding:
+                Plot batch_size vs time_per_query (ms)
+                batch_size vs queries_per_second
+                Memory usage bar chart
+                Efficiency (QPS per MB)
+            For FAISS retrieval:
+                k vs avg time (errorbar with std)
+                k vs searches per second
+            For memory:
+                Bar charts for memory_delta_mb and peak_traced_mb per named trace.
+
+        Saved files:
+            profiling/plots/embedding_performance.png
+            profiling/plots/retrieval_performance.png
+            profiling/plots/memory_usage.png
+
+        Visual notes:
+            Using simple line/bar plots is good for quick analysis; you could extend to interactive dashboards (TensorBoard, Plotly) for deeper investigation.
+            Seaborn is imported but not used directly (style only). That’s fine; remove unused imports if you want a cleaner module.
+        """
         print("Generating profiling plots...")
         
         # Set matplotlib style safely
@@ -581,3 +727,18 @@ if __name__ == "__main__":
         print(f"  - {rec['component']}: {rec['recommendation']}")
         print(f"    Expected speedup: {rec['expected_speedup']}")
         print(f"    Hardware target: {rec['hardware_target']}")
+
+
+        """
+        Interpretations (How to see?)
+
+        Embedding plots:
+            If time_per_query decreases strongly as batch size increases, batching helps (more throughput).
+            If memory_mb grows faster than throughput increase, you hit memory constraints — find the sweet spot.
+        FAISS plots:
+            avg_time vs k shows how retrieval cost scales with returned docs. For IndexFlatL2 the cost typically grows with k but often the dominant cost is distance computation if index is CPU-bound.
+            Memory traces:
+            memory_delta_mb shows which operations allocate the most resident memory.
+            peak_traced_mb from tracemalloc helps identify Python-level allocations (tokenization buffers, list comprehensions, temporary strings).
+    
+        """

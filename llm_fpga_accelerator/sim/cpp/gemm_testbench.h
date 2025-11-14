@@ -3,6 +3,7 @@
 
 #include <vector>
 #include <cstdint>
+#include <cstddef>  // For size_t
 #include <string>
 
 class GEMMTestbench {

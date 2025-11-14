@@ -2,7 +2,7 @@
 #define MEMORY_MODEL_H
 
 #include <cstdint>
-#include <cstddef>
+#include <cstddef>  // For size_t
 
 // Forward declaration
 class Vgemm_accelerator;
@@ -18,10 +18,8 @@ public:
     // Host-side helpers for testbench to pre-load data and read results
     void write_int16(uint32_t addr, int16_t value);
     int16_t read_int16(uint32_t addr);
-
     void write_int32(uint32_t addr, int32_t value);
     int32_t read_int32(uint32_t addr);
-
     uint16_t read_uint16(uint32_t addr);
 
 private:

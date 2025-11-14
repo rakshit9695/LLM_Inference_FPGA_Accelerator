@@ -2,7 +2,7 @@
 #define AXI_DRIVER_H
 
 #include <cstdint>
-#include <functional>
+#include <cstddef>  // For size_t if needed
 
 // Forward declaration
 class Vgemm_accelerator;
@@ -16,7 +16,7 @@ public:
     void write_register(uint32_t addr, uint32_t data);
     uint32_t read_register(uint32_t addr);
 
-    // Simple tick routine used by this driver if needed
+    // Clock tick function - use with caution, can conflict with main simulator
     void clock_tick();
 
 private:
